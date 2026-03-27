@@ -4,107 +4,88 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 
 st.set_page_config(page_title="Smart Inventory AI", layout="wide")
-
 st.title("📦 Smart Inventory Analytics Dashboard")
 
+# ---------------- LOAD DATA (FINAL FIX) ----------------
 @st.cache_data
 def load_data(file):
-    try:
-        return pd.read_csv(file, encoding='utf-8')
-    except:
-        return pd.read_csv(file, encoding='latin1')
+    return pd.read_csv(file, encoding='latin1')  # ✅ correct for your dataset
 
-@st.cache_resource
-def train_model(X, y):
-    model = LinearRegression()
-    model.fit(X, y)
-    return model
 
 file = st.file_uploader("Upload CSV", type=["csv"])
 
 if file:
     df = load_data(file)
-    df = df.tail(5000)
 
     # -------- DATA PREVIEW --------
-    st.subheader("📊 Data Preview")
+    st.subheader("📊 Data Preview (Original Format)")
     st.dataframe(df.head(), use_container_width=True)
 
-    # -------- COLUMN SELECT --------
-    st.subheader("⚙️ Configure Data")
+    # -------- CLEAN REQUIRED COLUMNS --------
+    df["ORDERDATE"] = pd.to_datetime(df["ORDERDATE"], errors='coerce')
+    df["QUANTITYORDERED"] = pd.to_numeric(df["QUANTITYORDERED"], errors='coerce')
 
-    col1, col2, col3, col4 = st.columns(4)
-    date_col = col1.selectbox("📅 Date Column", df.columns)
-    product_col = col2.selectbox("📦 Product Column", df.columns)
-    quantity_col = col3.selectbox("🔢 Quantity Column", df.columns)
-    category_col = col4.selectbox("🏷️ Category Column (Optional)", [None] + list(df.columns))
-
-    # -------- CLEAN --------
-    df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-    df[quantity_col] = pd.to_numeric(df[quantity_col], errors='coerce')
-
-    df = df.dropna(subset=[date_col, product_col, quantity_col])
-    df = df[df[quantity_col] > 0]
+    df = df.dropna(subset=["ORDERDATE", "QUANTITYORDERED", "PRODUCTCODE"])
+    df = df[df["QUANTITYORDERED"] > 0]
 
     if df.empty:
-        st.error("❌ Data invalid")
+        st.error("❌ Data invalid after cleaning")
         st.stop()
 
-    st.success("✅ Data Ready")
+    st.success("✅ Dataset Loaded Correctly (No Column Issues)")
 
     # -------- SALES TREND --------
-    st.subheader("📈 Sales Trend")
+    st.subheader("📈 Daily Sales (Units)")
 
-    daily_df = df.groupby(date_col)[quantity_col].sum().reset_index()
-    daily_df.columns = ["Date", "Sales"]
+    daily_df = df.groupby("ORDERDATE")["QUANTITYORDERED"].sum().reset_index()
+    daily_df.columns = ["Date", "Units Sold"]
 
-    st.line_chart(daily_df.set_index("Date"))
+    st.bar_chart(daily_df.set_index("Date"))
 
-    # -------- TOP 10 PRODUCTS --------
+    # -------- TOP PRODUCTS --------
     st.subheader("🏆 Top 10 Products")
 
-    top_products = df.groupby(product_col)[quantity_col].sum().sort_values(ascending=False).head(10)
-    top_products_df = top_products.reset_index()
-    top_products_df.columns = ["Product", "Sales"]
+    top_df = df.groupby("PRODUCTCODE")["QUANTITYORDERED"].sum().sort_values(ascending=False).head(10)
+    top_df = top_df.reset_index()
+    top_df.columns = ["Product", "Units Sold"]
 
-    st.bar_chart(top_products_df.set_index("Product"))
+    st.bar_chart(top_df.set_index("Product"))
 
-    # -------- TOP 10 CATEGORIES --------
-    if category_col:
-        st.subheader("🏷️ Top 10 Categories")
+    # -------- CATEGORY ANALYSIS --------
+    st.subheader("🏷️ Category Sales")
 
-        top_cat = df.groupby(category_col)[quantity_col].sum().sort_values(ascending=False).head(10)
-        top_cat_df = top_cat.reset_index()
-        top_cat_df.columns = ["Category", "Sales"]
+    cat_df = df.groupby("PRODUCTLINE")["QUANTITYORDERED"].sum().reset_index()
+    cat_df.columns = ["Category", "Units Sold"]
 
-        st.bar_chart(top_cat_df.set_index("Category"))
+    st.bar_chart(cat_df.set_index("Category"))
 
-    # -------- INVENTORY --------
+    # -------- INVENTORY INTELLIGENCE --------
     st.subheader("🧠 Inventory Intelligence")
 
     lead = st.slider("Lead Time (days)", 1, 30, 5)
     service = st.slider("Service Level (%)", 80, 99, 95)
 
-    avg = daily_df["Sales"].mean()
-    std = daily_df["Sales"].std()
+    avg = daily_df["Units Sold"].mean()
+    std = daily_df["Units Sold"].std()
 
     z = 1.65 if service >= 95 else 1.28
     safety = z * std
     reorder = (avg * lead) + safety
 
-    st.write(f"📌 Safety Stock: {int(safety)}")
-    st.write(f"📌 Reorder Point: {int(reorder)}")
+    st.write(f"📦 Safety Stock: {int(safety)} units")
+    st.write(f"📦 Reorder Point: {int(reorder)} units")
 
-    # -------- ML FORECAST --------
-    st.subheader("🔮 Future Demand (ML)")
+    # -------- FORECAST --------
+    st.subheader("🔮 Demand Forecast (Next 7 Days)")
 
     temp = daily_df.copy()
     temp["day"] = (temp["Date"] - temp["Date"].min()).dt.days
 
     X = temp[["day"]]
-    y = temp["Sales"]
+    y = temp["Units Sold"]
 
-    model = train_model(X, y)
+    model = LinearRegression()
+    model.fit(X, y)
 
     future_days = np.arange(temp["day"].max()+1, temp["day"].max()+8).reshape(-1,1)
     pred = model.predict(future_days)
@@ -113,45 +94,41 @@ if file:
 
     forecast = pd.DataFrame({
         "Date": future_dates,
-        "Predicted Demand": pred.astype(int)
+        "Predicted Units": pred.astype(int)
     })
 
-    st.line_chart(forecast.set_index("Date"))
+    st.bar_chart(forecast.set_index("Date"))
     st.dataframe(forecast)
 
-    st.info("📌 X-axis = Date | Y-axis = Demand predicted using ML")
-
-    # -------- FINAL REPORT (ALL PRODUCTS) --------
+    # -------- FINAL INVENTORY DECISIONS --------
     st.subheader("📄 Final Inventory Decisions")
 
-    all_products = df.groupby(product_col)[quantity_col].sum()
+    all_products = df.groupby("PRODUCTCODE")["QUANTITYORDERED"].sum()
 
     report = []
-
     for p in all_products.index:
         sales = all_products[p]
-        stock = sales * 0.5
+        stock = sales * 0.5  # simulated
 
         if stock < reorder:
-            action = "Reorder"
+            action = "🔴 Reorder"
         elif sales < all_products.mean() * 0.3:
-            action = "Stop Ordering"
+            action = "⚫ Stop Ordering"
         else:
-            action = "Reduce Stock"
+            action = "🟡 Reduce Stock"
 
         report.append([p, int(sales), int(stock), int(reorder), action])
 
     final_df = pd.DataFrame(report, columns=[
-        "Product", "Sales", "Stock", "Reorder Point", "Action"
+        "Product", "Sales (units)", "Stock (units)", "Reorder Point", "Action"
     ])
 
     st.dataframe(final_df)
 
     # -------- DECISION GRAPH --------
-    st.subheader("📊 Decision Overview")
+    st.subheader("📊 Decision Summary")
 
-    decision = final_df["Action"].value_counts()
-    decision_df = decision.reset_index()
+    decision_df = final_df["Action"].value_counts().reset_index()
     decision_df.columns = ["Decision", "Count"]
 
     st.bar_chart(decision_df.set_index("Decision"))
@@ -160,4 +137,4 @@ if file:
     csv = final_df.to_csv(index=False).encode()
     st.download_button("📥 Download Report", csv, "inventory_report.csv")
 
-    st.success("🚀 System Ready")
+    st.success("🚀 System Fully Working — Clean Columns + Correct Data")
